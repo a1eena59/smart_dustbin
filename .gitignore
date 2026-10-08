@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Stock COCO weights: Ultralytics re-downloads them on demand. Our own weights in models/ are committed.
+/yolov8n.pt
+# Local training runs (copy the keeper into models/ instead)
+runs/
+
+# Datasets (raw downloads and generated training sets; manifest.json makes them reproducible)
+data/
+*.zip
+
+# Decision logs
+logs/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
