@@ -46,10 +46,33 @@ When a model loads, its class names are checked against the mode. If no class co
 | `python run.py watch` | Opens a live preview with detection boxes. SPACE classifies; Q or ESC quits. |
 | `python run.py image --path x.jpg` | Repeats one still `burst_size` times and runs it through the same vote. Add `--log` to record the result. |
 | `python run.py bridge` | Shows which COCO objects count as which bin. |
+| `python run.py serve` | Starts the HTTP service for the ESP32 on `0.0.0.0:8000`. Change the address with `--host` and `--port`. Add `--save-frames DIR` to keep every burst for debugging. |
 
-All four commands accept `--model PATH`, `--coco`, `--camera N` and `--conf 0.xx`. `classify` and `watch` also accept `--no-log`. `classify` also accepts `--save-frames DIR`, which writes the voting frames as `DIR/<timestamp>_01.jpg` and so on.
+All commands accept `--model PATH`, `--coco`, `--camera N` and `--conf 0.xx`. `classify` and `watch` also accept `--no-log`. `classify` also accepts `--save-frames DIR`, which writes the voting frames as `DIR/<timestamp>_01.jpg` and so on.
 
 Precedence, highest first: **CLI flag → `WV_*` environment variable → default.**
+
+## HTTP service (ESP32)
+
+`python run.py serve` loads the model and opens the camera once at startup, then serves:
+
+| endpoint | reply |
+|---|---|
+| `POST /classify` | Captures a burst and votes. **Always returns HTTP 200** with `category`, `index`, `confidence`, `decided_by`, `votes`, `frames_used` and `elapsed_ms`, including on fallback and when the camera is dead (`frames_used: 0`). Returns **409** only if another `/classify` is still running. Bursts never overlap. |
+| `GET /health` | `{"status","model","camera","uptime_s"}`. Returns **200** if the camera is working and **503** if not, so the ESP32 can light its red LED on any non-200 response. |
+| `GET /stats` | Session totals per category, number of requests, fallback rate, mean and p95 latency, simulated requests, busy (409) rejections and empty bursts. |
+| `POST /simulate` | Takes `{"image_path": "..."}` or a multipart upload named `file`. Runs the same vote on that image and returns the same reply as `/classify`. It never touches the camera and isn't written to the CSV log. |
+
+The service runs as a single process, because there is one camera. On Windows, allow Python through the firewall on **Private** networks the first time it starts, or the ESP32 won't be able to reach it.
+
+### Debugging misclassifications
+
+`python run.py serve --save-frames shots` writes every `/classify` burst to its own folder, `shots/<time>_<category>_<decided_by>/`. Each frame is saved twice:
+
+- `NN_raw.jpg` is the untouched frame. Relabel it and add it to the training set if the model got it wrong.
+- `NN_<category>-<conf>.jpg` (or `NN_none.jpg`) has the detection that frame voted with drawn on it. Look at the box first: if it sits on something behind the item, the model is classifying the background, not the item.
+
+Saving adds roughly 50–100 ms to each request, and a burst is about 1 MB, so turn it off once you have found the problem. A failed save is logged but never changes the answer sent to the ESP32.
 
 ## Configuration
 
@@ -71,6 +94,7 @@ Every setting is a field of `Settings` in `wastevision/settings.py`. You can ove
 | min_margin | 2 | the number of votes the winner must lead the runner-up by |
 | fallback_category | organic | used when the vote is not decisive |
 | log_path | logs/decisions.csv | append-only decision log |
+| save_frames_dir | (empty = off) | `serve` only: save every burst here, raw and annotated |
 | native_waste_classes | true | the model already outputs plastic/paper/organic, so the COCO bridge is skipped; set to false only for COCO weights |
 
 ## How a decision is made

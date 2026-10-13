@@ -51,13 +51,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--log", action="store_true", help="also append the result to the decision log")
 
     sub.add_parser("bridge", parents=[common], help="show which COCO objects map to which bin")
+
+    p = sub.add_parser("serve", parents=[common], help="HTTP service for the ESP32")
+    p.add_argument("--host", dest="server_host", help="bind address (default 0.0.0.0 = all interfaces)")
+    p.add_argument("--port", dest="server_port", type=int, help="TCP port (default 8000)")
+    p.add_argument(
+        "--save-frames", dest="save_frames_dir", metavar="DIR", help="save every burst (raw + annotated) under DIR"
+    )
     return parser
 
 
 def load_settings(args: argparse.Namespace) -> Settings:
     overrides = {
         key: getattr(args, key)
-        for key in ("model_path", "camera_index", "conf_floor")
+        for key in ("model_path", "camera_index", "conf_floor", "server_host", "server_port", "save_frames_dir")
         if getattr(args, key, None) is not None
     }
     if args.coco:
@@ -166,20 +173,14 @@ def cmd_image(args: argparse.Namespace, settings: Settings) -> int:
 def annotate(frame: np.ndarray, det: Detection | None, status: str, settings: Settings) -> np.ndarray:
     import cv2
 
-    view = frame.copy()
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    if det is not None:
-        color = CATEGORY_COLORS_BGR[det.category]
-        x1, y1, x2, y2 = (int(v) for v in det.box)
-        cv2.rectangle(view, (x1, y1), (x2, y2), color, settings.preview_box_thickness)
-        label = f"{det.category} ({det.raw_class} {det.confidence:.2f})"
-        y = max(y1 - settings.preview_text_margin_px, settings.preview_status_y_px)
-        cv2.putText(view, label, (x1, y), font, settings.preview_font_scale, color, settings.preview_text_thickness)
+    from wastevision.snapshots import draw_detection
+
+    view = draw_detection(frame, det, settings)
     cv2.putText(
         view,
         status,
         (settings.preview_text_margin_px, settings.preview_status_y_px),
-        font,
+        cv2.FONT_HERSHEY_SIMPLEX,
         settings.preview_font_scale,
         CATEGORY_COLORS_BGR["paper"],
         settings.preview_text_thickness,
@@ -247,7 +248,42 @@ def cmd_bridge(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
-COMMANDS = {"classify": cmd_classify, "watch": cmd_watch, "image": cmd_image, "bridge": cmd_bridge}
+def lan_ip() -> str | None:
+    import socket
+
+    # Connecting a UDP socket sends nothing; it just makes the OS pick the outbound
+    # interface, whose address is the one the ESP32 should call.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
+def cmd_serve(args: argparse.Namespace, settings: Settings) -> int:
+    import logging
+
+    import uvicorn
+
+    from wastevision.server import create_app
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    ip = lan_ip()
+    if settings.server_host == "0.0.0.0" and ip:
+        print(f"ESP32 should call: http://{ip}:{settings.server_port}/classify")
+    # One process only: the camera is a single device and the burst lock is per-process.
+    uvicorn.run(create_app(settings), host=settings.server_host, port=settings.server_port)
+    return 0
+
+
+COMMANDS = {
+    "classify": cmd_classify,
+    "watch": cmd_watch,
+    "image": cmd_image,
+    "bridge": cmd_bridge,
+    "serve": cmd_serve,
+}
 
 
 def main(argv: list[str] | None = None) -> int:

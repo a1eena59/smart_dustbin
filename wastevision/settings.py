@@ -63,6 +63,17 @@ class Settings:
 
     # Logging
     log_path: str = "logs/decisions.csv"
+    # When set, every /classify burst is written here (raw + annotated frames) for
+    # debugging misclassifications. Empty = off: each burst is ~1 MB.
+    save_frames_dir: str = ""
+
+    # HTTP server (ESP32 bridge)
+    # 0.0.0.0, not localhost: the ESP32 is another machine on the LAN.
+    server_host: str = "0.0.0.0"
+    server_port: int = 8000
+    # /stats latency percentiles cover the most recent N requests, so memory stays
+    # bounded on a bin that runs for weeks.
+    stats_latency_window: int = 1000
 
     # CLI preview (watch mode only)
     preview_box_thickness: int = 2
@@ -100,6 +111,10 @@ class Settings:
             )
         if self.capture_width < 1 or self.capture_height < 1:
             raise ValueError("capture_width and capture_height must be positive")
+        if not 1 <= self.server_port <= 65535:
+            raise ValueError(f"server_port must be 1-65535, got {self.server_port}")
+        if self.stats_latency_window < 1:
+            raise ValueError(f"stats_latency_window must be >= 1, got {self.stats_latency_window}")
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> "Settings":
